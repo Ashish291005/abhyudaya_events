@@ -331,7 +331,16 @@
     v.onclick = e => {
       const t = e.target;
       if (t.dataset.add !== undefined) { data.push(structuredClone(S.blank)); }
-      else if (t.dataset.rm) { if (!confirm('Remove this item?')) return; data.splice(+t.dataset.rm, 1); }
+      else if (t.dataset.rm) {
+        if (!confirm('Remove this item?')) return;
+        const [removed] = data.splice(+t.dataset.rm, 1);
+        // the hero carousel is a separate list; offer to remove the same photo there too
+        const slides = content.hero?.slides || [];
+        if (S.path === 'gallery' && removed?.image && slides.some(s => s.image === removed.image)
+          && confirm('This photo is also in the Hero Carousel at the top of the website.\n\nRemove it from the Hero Carousel too?')) {
+          content.hero.slides = slides.filter(s => s.image !== removed.image);
+        }
+      }
       else if (t.dataset.mv) { const [i, d] = t.dataset.mv.split(':').map(Number); const j = i + d; if (j < 0 || j >= data.length) return; [data[i], data[j]] = [data[j], data[i]]; }
       else if (t.dataset.addimg) { getPath(t.dataset.addimg).push(''); }
       else if (t.dataset.addcat !== undefined) {
