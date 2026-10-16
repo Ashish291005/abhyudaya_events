@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Admin | Abhyudaya Events</title>
+  <link rel="icon" href="/assets/logo.png">
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600&family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/admin/admin.css">
+  <script>
+    // apply the saved theme (or the device preference) before the page paints
+    (function () {
+      var t = null; try { t = localStorage.getItem('ae_admin_theme'); } catch (e) {}
+      if (!t) t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      document.documentElement.dataset.theme = t;
+    })();
+  </script>
+</head>
+<body>
+  <!-- Login -->
+  <section id="login" class="login">
+    <form id="loginForm" class="login-card">
+      <img src="/assets/logo.png" alt="Abhyudaya Events">
+      <h1>Admin Console</h1>
+      <label>Username<input name="username" autocomplete="username" required></label>
+      <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+      <button class="btn">Sign in</button>
+      <p class="err" id="loginErr"></p>
+    </form>
+  </section>
+
+  <!-- App -->
+  <div id="app" class="app" hidden>
+    <aside class="side" id="side">
+      <div class="side-brand"><img src="/assets/logo-mark.png" alt=""><span>Abhyudaya<small>Admin</small></span></div>
+      <nav id="menu"></nav>
+      <div class="side-foot">
+        <a href="/" target="_blank" class="link">↗ View website</a>
+        <button id="logout" class="link">Sign out</button>
+      </div>
+    </aside>
+    <main class="main">
+      <header class="top">
+        <button class="menu-btn" id="menuBtn" aria-label="Menu">☰</button>
+        <h2 id="pageTitle">Dashboard</h2>
+        <div class="top-actions">
+          <span class="dirty" id="dirty" hidden>Unsaved changes</span>
+          <button class="theme-btn" id="themeBtn" type="button" aria-label="Switch theme" title="Switch light / dark theme"></button>
+          <button class="btn" id="saveBtn">Save &amp; Publish</button>
+        </div>
+      </header>
+      <div class="content" id="view"></div>
+    </main>
+  </div>
+  <div class="toast" id="toast"></div>
+  <script src="/admin/admin.js"></script>
+</body>
+</html>

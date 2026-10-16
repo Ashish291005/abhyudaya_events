@@ -1,0 +1,14 @@
+# private / runtime data — never commit
+data/auth.json
+data/enquiries.json
+data/content.backup.json
+
+# uploaded files live on the server
+public/uploads/*
+!public/uploads/.gitkeep
+
+# local tooling
+node_modules/
+.claude/
+.DS_Store
+Thumbs.db
