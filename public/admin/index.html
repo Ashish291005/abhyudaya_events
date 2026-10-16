@@ -3,19 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="robots" content="noindex">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="referrer" content="no-referrer">
   <title>Admin | Abhyudaya Events</title>
   <link rel="icon" href="/assets/logo.png">
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600&family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/admin/admin.css">
-  <script>
-    // apply the saved theme (or the device preference) before the page paints
-    (function () {
-      var t = null; try { t = localStorage.getItem('ae_admin_theme'); } catch (e) {}
-      if (!t) t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-      document.documentElement.dataset.theme = t;
-    })();
-  </script>
+  <script src="/admin/theme.js"></script>
 </head>
 <body>
   <!-- Login -->
@@ -23,10 +17,10 @@
     <form id="loginForm" class="login-card">
       <img src="/assets/logo.png" alt="Abhyudaya Events">
       <h1>Admin Console</h1>
-      <label>Username<input name="username" autocomplete="username" required></label>
+      <label>Email<input name="email" type="email" autocomplete="username" required></label>
       <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
-      <button class="btn">Sign in</button>
-      <p class="err" id="loginErr"></p>
+      <button class="btn" id="loginBtn">Sign in</button>
+      <p class="err" id="loginErr" role="alert"></p>
     </form>
   </section>
 
@@ -54,6 +48,8 @@
     </main>
   </div>
   <div class="toast" id="toast"></div>
+  <script src="/config.js"></script>
+  <script src="/admin/vendor/supabase.min.js"></script>
   <script src="/admin/admin.js"></script>
 </body>
 </html>

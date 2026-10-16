@@ -3,8 +3,45 @@
   const $$ = (s, r = document) => [...r.querySelectorAll(s)];
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-  let token = sessionStorage.getItem('ae_token') || '';
-  let content = null, enquiries = [], dirty = false, current = 'dashboard';
+  let content = null, rev = 0, enquiries = [], dirty = false, current = 'dashboard';
+
+  // ---------- Supabase client ----------
+  // Only the public URL + anon key live in the browser. Every write is checked in the
+  // database (supabase/schema.sql): non-admins are refused even with a valid login.
+  const CFG = window.AE_CONFIG || {};
+  const sb = CFG.supabaseUrl && CFG.supabaseAnonKey && window.supabase
+    ? window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseAnonKey, {
+        // session lives only in this tab: closing the browser signs the admin out
+        auth: { storage: window.sessionStorage, persistSession: true, autoRefreshToken: true, detectSessionInUrl: false }
+      })
+    : null;
+  // turn database/auth errors into short, human messages
+  const fail = (error, fallback = 'Something went wrong') => {
+    if (!error) return;
+    const m = error.message || '';
+    if (/stale/.test(m)) throw new Error('stale');
+    if (error.code === '42501' || /not authorized|permission denied|row-level security/i.test(m)) throw new Error('This account is not allowed to do that.');
+    if (/JWT|session|expired/i.test(m)) { logout(); throw new Error('Session expired — please sign in again.'); }
+    throw new Error(m || fallback);
+  };
+  const toEnquiry = r => ({ id: r.id, name: r.name, email: r.email, phone: r.phone, eventType: r.event_type, date: r.event_date,
+    guests: r.guests, budget: r.budget, message: r.message, status: r.status, createdAt: r.created_at });
+  async function loadContent() {
+    const { data, error } = await sb.from('site_content').select('data, rev').eq('id', 1).maybeSingle();
+    fail(error, 'Could not load content');
+    if (!data) throw new Error('No website content found. Run supabase/seed.sql in Supabase first.');
+    content = data.data; rev = data.rev;
+  }
+  async function loadEnquiries() {
+    const { data, error } = await sb.from('enquiries').select('*').order('created_at', { ascending: false }).limit(1000);
+    fail(error, 'Could not load enquiries');
+    enquiries = data.map(toEnquiry);
+  }
+  async function publish(next) {
+    const { data, error } = await sb.rpc('save_content', { new_data: next, expected_rev: rev });
+    fail(error, 'Could not save');
+    rev = data;
+  }
 
   // ---------- schema: drives every content editor ----------
   const ICON_OPTS = ['calendar', 'mic', 'megaphone', 'star', 'users', 'building', 'sparkle', 'heart'];
@@ -58,14 +95,6 @@
     ['Settings', [['theme', 'Brand Colours'], ['settings', 'Account & Backup']]]
   ];
 
-  // ---------- api ----------
-  async function api(path, opts = {}) {
-    const r = await fetch(path, { ...opts, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...(opts.headers || {}) } });
-    const data = await r.json().catch(() => ({}));
-    if (r.status === 401 && path !== '/api/login') { logout(); throw new Error('Session expired'); }
-    if (!r.ok) throw new Error(data.error || 'Request failed');
-    return data;
-  }
   const toast = msg => { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(t._t); t._t = setTimeout(() => t.classList.remove('show'), 2600); };
   const setDirty = v => { dirty = v; $('#dirty').hidden = !v; };
 
@@ -84,20 +113,35 @@
   };
   paintThemeBtn();
 
-  // ---------- auth ----------
+  // ---------- auth (Supabase Auth: passwords are checked and rate-limited on Supabase's servers) ----------
+  const loginErr = msg => { $('#loginErr').textContent = msg; };
+  // a valid login is not enough: the account must also be on the admins list
+  async function isAdmin() {
+    const { data, error } = await sb.from('admins').select('user_id').maybeSingle();
+    return !error && !!data;
+  }
   $('#loginForm').onsubmit = async e => {
     e.preventDefault();
+    if (!sb) return;
     const f = Object.fromEntries(new FormData(e.target));
-    try { token = (await api('/api/login', { method: 'POST', body: JSON.stringify(f) })).token; sessionStorage.setItem('ae_token', token); start(); }
-    catch (err) { $('#loginErr').textContent = err.message; }
+    const btn = $('#loginBtn'); btn.disabled = true; loginErr('');
+    try {
+      const { error } = await sb.auth.signInWithPassword({ email: String(f.email).trim(), password: f.password });
+      // same message for wrong email or wrong password, so the form doesn't reveal which accounts exist
+      if (error) return loginErr(/rate|too many/i.test(error.message) ? 'Too many attempts. Please wait a few minutes.' : 'Invalid email or password.');
+      if (!(await isAdmin())) { await sb.auth.signOut(); return loginErr('This account does not have admin access.'); }
+      e.target.reset();
+      await start();
+    } catch (err) { loginErr(err.message); }
+    finally { btn.disabled = false; }
   };
-  function logout() { api('/api/logout', { method: 'POST' }).catch(() => {}); token = ''; sessionStorage.removeItem('ae_token'); $('#app').hidden = true; $('#login').hidden = false; }
+  function showLogin() { content = null; enquiries = []; setDirty(false); $('#app').hidden = true; $('#login').hidden = false; }
+  async function logout() { try { await sb?.auth.signOut(); } catch {} showLogin(); }
   $('#logout').onclick = logout;
 
   async function start() {
-    try {
-      [content, enquiries] = await Promise.all([fetch('/api/content', { cache: 'no-store' }).then(r => r.json()), api('/api/enquiries')]);
-    } catch { return; }
+    try { await Promise.all([loadContent(), loadEnquiries()]); }
+    catch (err) { loginErr(err.message); return; }
     $('#login').hidden = true; $('#app').hidden = false;
     buildMenu(); show(current);
   }
@@ -112,13 +156,15 @@
   $('#side').onclick = e => { if (e.target === $('#side')) $('#side').classList.remove('open'); };
 
   $('#saveBtn').onclick = async () => {
-    try { const r = await api('/api/content', { method: 'PUT', body: JSON.stringify(content) }); content._rev = r.rev; setDirty(false); toast('✦ Published — website updated'); }
+    const btn = $('#saveBtn'); btn.disabled = true;
+    try { await publish(content); setDirty(false); toast('✦ Published — website updated'); }
     catch (err) { if (err.message === 'stale') return staleReload(); toast(err.message); }
+    finally { btn.disabled = false; }
   };
-  // another tab (or an update) saved newer content: never overwrite it, load the latest instead
+  // another tab (or device) saved newer content: never overwrite it, load the latest instead
   async function staleReload() {
-    alert('The website content was changed somewhere else after you opened this page (another tab, device or an update).\n\nTo avoid overwriting those changes, the latest content will now be loaded. Please redo your last edits.');
-    content = await fetch('/api/content', { cache: 'no-store' }).then(r => r.json());
+    alert('The website content was changed somewhere else after you opened this page (another tab or device).\n\nTo avoid overwriting those changes, the latest content will now be loaded. Please redo your last edits.');
+    try { await loadContent(); } catch (err) { return toast(err.message); }
     setDirty(false); show(current);
   }
   addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
@@ -178,15 +224,16 @@
       $('#tbl').innerHTML = enquiryTable(enquiries.filter(e => (!s || e.status === s) && (!q || JSON.stringify(e).toLowerCase().includes(q))));
     };
     $('#q').oninput = draw; $('#fs').onchange = draw; draw();
-    $('#refresh').onclick = async () => { enquiries = await api('/api/enquiries'); buildMenu(); draw(); toast('Refreshed'); };
+    $('#refresh').onclick = async () => { try { await loadEnquiries(); buildMenu(); draw(); toast('Refreshed'); } catch (err) { toast(err.message); } };
     $('#tbl').onchange = async e => {
       const id = e.target.dataset.id; if (!id) return;
-      await api(`/api/enquiries/${id}`, { method: 'PATCH', body: JSON.stringify({ status: e.target.value }) });
+      try { const { error } = await sb.from('enquiries').update({ status: e.target.value }).eq('id', id); fail(error); }
+      catch (err) { draw(); return toast(err.message); }
       enquiries.find(x => x.id === id).status = e.target.value; buildMenu(); draw(); toast('Status updated');
     };
     $('#tbl').onclick = async e => {
       const id = e.target.dataset.del; if (!id || !confirm('Delete this enquiry permanently?')) return;
-      await api(`/api/enquiries/${id}`, { method: 'DELETE' });
+      try { const { error } = await sb.from('enquiries').delete().eq('id', id); fail(error); } catch (err) { return toast(err.message); }
       enquiries = enquiries.filter(x => x.id !== id); buildMenu(); draw(); toast('Deleted');
     };
     $('#csv').onclick = () => {
@@ -269,11 +316,17 @@
     v.onchange = async e => {
       const p = e.target.dataset.upload; if (!p) return;
       const file = e.target.files[0]; if (!file) return;
+      const EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif', 'video/mp4': 'mp4', 'video/webm': 'webm' };
+      if (!EXT[file.type]) return toast('Only PNG, JPG, WEBP, GIF images or MP4/WEBM videos can be uploaded');
       if (file.size > 20 * 1024 * 1024) return toast('File too large (max 20 MB)');
       toast('Uploading…');
-      const dataUrl = await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(file); });
-      try { const { url } = await api('/api/upload', { method: 'POST', body: JSON.stringify({ data: dataUrl }) }); setPath(p, url); setDirty(true); renderSection(v, S); toast('Uploaded — remember to Save & Publish'); }
-      catch (err) { toast(err.message); }
+      try {
+        const name = `${new Date().toISOString().slice(0, 10)}/${crypto.randomUUID()}.${EXT[file.type]}`;
+        const { error } = await sb.storage.from('media').upload(name, file, { contentType: file.type, cacheControl: '31536000', upsert: false });
+        fail(error, 'Upload failed');
+        const url = sb.storage.from('media').getPublicUrl(name).data.publicUrl;
+        setPath(p, url); setDirty(true); renderSection(v, S); toast('Uploaded — remember to Save & Publish');
+      } catch (err) { toast(err.message); }
     };
     v.onclick = e => {
       const t = e.target;
@@ -304,29 +357,59 @@
   // ---------- settings ----------
   function renderSettings(v) {
     v.innerHTML = `
-      <div class="card"><h3>Change login</h3>
+      <div class="card"><h3>Change password</h3>
+        <p class="hint">Signed in as <b id="meEmail"></b>. Use a long, unique password (12+ characters).</p>
         <form id="pw" class="grid">
-          <label class="field"><span>New username (optional)</span><input name="username" autocomplete="username"></label>
           <label class="field"><span>Current password</span><input name="current" type="password" required autocomplete="current-password"></label>
-          <label class="field"><span>New password (min 8 chars)</span><input name="next" type="password" required minlength="8" autocomplete="new-password"></label>
-          <div class="field" style="align-self:end"><button class="btn">Update</button></div>
+          <label class="field"><span>New password</span><input name="next" type="password" required minlength="12" autocomplete="new-password"></label>
+          <label class="field"><span>Repeat new password</span><input name="again" type="password" required minlength="12" autocomplete="new-password"></label>
+          <div class="field" style="align-self:end"><button class="btn">Update password</button></div>
         </form></div>
+      <div class="card"><h3>Sessions</h3>
+        <p class="hint">Lost a device or think someone else signed in? This signs your account out everywhere, including here.</p>
+        <button class="btn danger" id="signOutAll">Sign out of all devices</button></div>
       <div class="card"><h3>Backup &amp; restore</h3>
         <p class="hint">Download all website content as a file, or restore from a previous backup.</p>
         <div class="toolbar"><button class="btn ghost" id="dl">Download backup</button><label class="btn ghost">Restore from file<input type="file" accept=".json" hidden id="restore"></label></div></div>`;
+    sb.auth.getUser().then(({ data }) => { $('#meEmail').textContent = data?.user?.email || ''; });
     $('#pw').onsubmit = async e => {
       e.preventDefault();
-      try { await api('/api/password', { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(e.target))) }); toast('Updated — please sign in again'); setTimeout(logout, 1200); }
-      catch (err) { toast(err.message); }
+      const f = Object.fromEntries(new FormData(e.target));
+      if (f.next !== f.again) return toast('The new passwords do not match');
+      if (f.next === f.current) return toast('Choose a password different from the current one');
+      try {
+        const { data: { user } } = await sb.auth.getUser();
+        // confirm the current password before allowing a change
+        const { error: reauth } = await sb.auth.signInWithPassword({ email: user.email, password: f.current });
+        if (reauth) return toast('Current password is incorrect');
+        const { error } = await sb.auth.updateUser({ password: f.next });
+        fail(error, 'Could not change password');
+        e.target.reset(); toast('Password updated');
+      } catch (err) { toast(err.message); }
+    };
+    $('#signOutAll').onclick = async () => {
+      if (!confirm('Sign out of every device, including this one?')) return;
+      try { await sb.auth.signOut({ scope: 'global' }); } catch {}
+      showLogin();
     };
     $('#dl').onclick = () => Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob([JSON.stringify(content, null, 2)], { type: 'application/json' })), download: 'abhyudaya-content-backup.json' }).click();
     $('#restore').onchange = async e => {
       try { const c = JSON.parse(await e.target.files[0].text()); if (!c.site || !c.services) throw new Error('Not a valid backup file');
         if (!confirm('Replace all website content with this backup?')) return;
-        c._rev = content._rev; const r = await api('/api/content', { method: 'PUT', body: JSON.stringify(c) }); content = c; content._rev = r.rev; toast('Restored & published'); }
-      catch (err) { toast(err.message); }
+        delete c._rev; await publish(c); content = c; setDirty(false); toast('Restored & published'); }
+      catch (err) { if (err.message === 'stale') return staleReload(); toast(err.message); }
     };
   }
 
-  if (token) start();
+  // ---------- boot ----------
+  if (!sb) {
+    $('#loginForm').querySelectorAll('input,button').forEach(el => el.disabled = true);
+    loginErr('Supabase is not configured yet. Add your project URL and anon key to public/config.js.');
+  } else {
+    sb.auth.onAuthStateChange(evt => { if (evt === 'SIGNED_OUT') showLogin(); });
+    sb.auth.getSession().then(async ({ data }) => {
+      if (!data.session) return;
+      if (await isAdmin()) start(); else { await sb.auth.signOut(); showLogin(); }
+    });
+  }
 })();

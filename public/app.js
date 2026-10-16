@@ -22,9 +22,38 @@
 
   let C;
 
+  // ---------- backend (Supabase REST, public "anon" key only) ----------
+  const CFG = window.AE_CONFIG || {};
+  const SB = CFG.supabaseUrl && CFG.supabaseAnonKey ? CFG.supabaseUrl.replace(/\/+$/, '') : '';
+  const sbHeaders = () => ({ apikey: CFG.supabaseAnonKey, Authorization: `Bearer ${CFG.supabaseAnonKey}`, 'Content-Type': 'application/json' });
+  async function loadContent() {
+    if (!SB) {
+      console.warn('Supabase is not configured (public/config.js) — showing sample content.');
+      return (await fetch('/content.sample.json', { cache: 'no-store' })).json();
+    }
+    const r = await fetch(`${SB}/rest/v1/site_content?id=eq.1&select=data`, { headers: sbHeaders(), cache: 'no-store' });
+    if (!r.ok) throw new Error(`content ${r.status}`);
+    const rows = await r.json();
+    if (!rows.length) throw new Error('no content row — run supabase/seed.sql');
+    return rows[0].data;
+  }
+  async function saveEnquiry(d) {
+    if (!SB) throw new Error('not configured');
+    const clip = (s, n) => (String(s || '').trim().slice(0, n) || null);
+    const r = await fetch(`${SB}/rest/v1/enquiries`, {
+      method: 'POST', headers: { ...sbHeaders(), Prefer: 'return=minimal' },
+      body: JSON.stringify({ name: clip(d.name, 120), email: clip(d.email, 160), phone: clip(d.phone, 30), event_type: clip(d.eventType, 80),
+        event_date: clip(d.date, 30), guests: clip(d.guests, 30), budget: clip(d.budget, 30), message: clip(d.message, 2000) })
+    });
+    if (!r.ok) throw new Error(`enquiry ${r.status}`);
+  }
+
   async function init() {
-    try { C = await (await fetch('/api/content', { cache: 'no-store' })).json(); }
-    catch { C = null; }
+    try { C = await loadContent(); }
+    catch (e) {
+      console.error('Could not load content:', e);
+      try { C = await (await fetch('/content.sample.json', { cache: 'no-store' })).json(); } catch { C = null; }
+    }
     if (C) render();
     setupInteractions();
     setTimeout(() => { $('#preloader').classList.add('done'); startHero(); }, 900);
@@ -509,19 +538,19 @@
       // open the WhatsApp tab right away (inside the click) so popup blockers allow it
       const waNum = String(C.contact.enquiryWhatsapp || C.contact.whatsapp || '').replace(/\D/g, '');
       const waWin = waNum ? window.open('', '_blank') : null;
-      try {
-        const r = await fetch('/api/enquiry', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
-        if (!r.ok) throw new Error((await r.json()).error);
+      // save to the admin's enquiry list; WhatsApp still opens if this fails, since the message carries every detail
+      let saved = true;
+      try { await saveEnquiry(data); } catch (err) { saved = false; console.error('Enquiry not saved:', err); }
+      if (waNum) {
+        const fields = [['Name', data.name], ['Phone', data.phone], ['Email', data.email], ['Event', data.eventType], ['Date', data.date],
+          ['Guests', data.guests], ['Budget', data.budget], ['Details', data.message]].filter(([, v]) => v).map(([k, v]) => `*${k}:* ${v}`);
+        const text = ['Hello Abhyudaya Events! I would like to plan an event.', '', ...fields].join('\n');
+        const url = `https://wa.me/${waNum}?text=${encodeURIComponent(text)}`;
+        if (waWin) waWin.location.href = url; else location.href = url;
         form.reset(); go(0);
-        if (waNum) {
-          const fields = [['Name', data.name], ['Phone', data.phone], ['Email', data.email], ['Event', data.eventType], ['Date', data.date],
-            ['Guests', data.guests], ['Budget', data.budget], ['Details', data.message]].filter(([, v]) => v).map(([k, v]) => `*${k}:* ${v}`);
-          const text = ['Hello Abhyudaya Events! I would like to plan an event.', '', ...fields].join('\n');
-          const url = `https://wa.me/${waNum}?text=${encodeURIComponent(text)}`;
-          if (waWin) waWin.location.href = url; else location.href = url;
-          msg.innerHTML = `✦ Thank you! Your enquiry is saved. Please press <b>Send</b> in WhatsApp to reach us. <a href="${esc(url)}" target="_blank" rel="noopener" style="text-decoration:underline">Open WhatsApp again</a>`;
-        } else msg.textContent = '✦ Thank you! Our team will reach out within 24 hours.';
-      } catch (err) { waWin?.close(); msg.textContent = err.message || 'Something went wrong. Please call us instead.'; }
+        msg.innerHTML = `✦ Thank you!${saved ? ' Your enquiry is saved.' : ''} Please press <b>Send</b> in WhatsApp to reach us. <a href="${esc(url)}" target="_blank" rel="noopener" style="text-decoration:underline">Open WhatsApp again</a>`;
+      } else if (saved) { form.reset(); go(0); msg.textContent = '✦ Thank you! Our team will reach out within 24 hours.'; }
+      else msg.textContent = 'Sorry, we could not send your enquiry right now. Please call or WhatsApp us instead.';
     };
   }
 
