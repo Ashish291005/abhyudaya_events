@@ -62,6 +62,7 @@
   function render() {
     const { site, hero, about, contact } = C;
     document.title = `${site.name} | ${site.tagline}`;
+    $('#year').textContent = new Date().getFullYear();
     $('meta[name=description]').content = site.seoDescription || '';
     if (C.theme) Object.entries(C.theme).forEach(([k, v]) => v && document.documentElement.style.setProperty(`--${k}`, v));
     ['#footLogo', '.pre-logo'].forEach(s => { if (site.logo) $(s).src = safeUrl(site.logo); });
