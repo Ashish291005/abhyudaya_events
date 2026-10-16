@@ -369,7 +369,6 @@
   }
 
   function setupEventPopup({ ev, i, t, state }) {
-    const key = `ae_ev_seen_${ev.title}_${ev.date}`;
     const ps = posters(ev);
     const when = t ? `${fmtDate(t)}${ev.showTime === false ? '' : ` · ${fmtTime(t)}`}` : '';
     const tag = state === 'live' ? 'Happening Now' : (ev.tag || (t ? relDay(t) : 'Upcoming Event'));
@@ -393,16 +392,15 @@
     const pop = $('#evPop'), pill = $('#evPill');
     const cd = $('.ev-count', pop); if (cd) countdowns.push({ el: cd, t });
     const open = () => { pop.classList.add('open'); pill.classList.remove('show'); document.body.style.overflow = 'hidden'; };
-    const close = () => { pop.classList.remove('open'); pill.classList.add('show'); document.body.style.overflow = ''; try { sessionStorage.setItem(key, '1'); } catch {} };
+    const close = () => { pop.classList.remove('open'); pill.classList.add('show'); document.body.style.overflow = ''; };
     pop.addEventListener('click', e => {
       if (e.target.closest('[data-poster]')) { close(); return openPosters(ev); }
       if (e.target === pop || e.target.closest('.ev-close,[data-evgo]')) close();
     });
     addEventListener('keydown', e => { if (e.key === 'Escape' && pop.classList.contains('open')) close(); });
     pill.onclick = open;
-    let seen = false; try { seen = !!sessionStorage.getItem(key); } catch {}
-    if (seen) pill.classList.add('show');
-    else setTimeout(open, Math.max(0, +ev.delay || 4) * 1000);
+    // opens on every page load, after the delay set in the admin
+    setTimeout(open, Math.max(0, +ev.delay || 4) * 1000);
   }
 
   // ---------------- interactions ----------------
