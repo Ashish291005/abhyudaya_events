@@ -29,8 +29,21 @@ function hashPassword(pw, salt = crypto.randomBytes(16).toString('hex')) {
 }
 function ensureAuth() {
   if (!fs.existsSync(AUTH_FILE)) {
-    // First run: default credentials (change them from Admin → Settings).
-    writeJSON(AUTH_FILE, { username: 'admin', ...hashPassword('Abhyudaya@2026') });
+    // First run: credentials come from ADMIN_USERNAME / ADMIN_PASSWORD. There is no built-in default
+    // password; without ADMIN_PASSWORD a random one is generated and shown once in this console.
+    const username = (process.env.ADMIN_USERNAME || 'admin').trim();
+    let password = process.env.ADMIN_PASSWORD || '';
+    if (password && password.length < 8) { console.error('ADMIN_PASSWORD must be at least 8 characters.'); process.exit(1); }
+    if (!password) {
+      password = crypto.randomBytes(9).toString('base64url');
+      console.log('\n================ FIRST-RUN ADMIN LOGIN ================');
+      console.log(`  Username: ${username}`);
+      console.log(`  Password: ${password}`);
+      console.log('  Shown only once. Change it in Admin → Account & Backup.');
+      console.log('  (Set ADMIN_PASSWORD before the first start to choose your own.)');
+      console.log('=======================================================\n');
+    }
+    writeJSON(AUTH_FILE, { username, ...hashPassword(password) });
   }
   return readJSON(AUTH_FILE);
 }
